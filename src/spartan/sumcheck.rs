@@ -451,7 +451,7 @@ mod tests {
 
   #[test]
   fn test_prove() {
-    // g(X_0, X_1, X_2) = 2 * X_0^3 + X_0 * X_2 + X_1 X_2
+    // g(X_0, X_1, X_2) = 2 X_0^3 + X_0 X_2 + X_1 X_2
     let Z = vec![
       Fq::zero(),
       Fq::zero(),

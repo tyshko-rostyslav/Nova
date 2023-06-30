@@ -25,14 +25,21 @@ where
   let mut e = claim;
   for (i, poly) in polys.iter().enumerate() {
     // TODO verify poly degree
-    if poly.len() != degree_bound {
-      panic!("TODO: constraint");
-    }
+    // if poly.len() != degree_bound {
+    //   dbg!(poly.len(), degree_bound);
+    // }
 
     // eval at zero
     let eval_0 = poly[0].clone();
     // eval at one
     let eval_1 = eval_at_one(cs.namespace(|| format!("sc_eval_at_one {}", i)), poly)?;
+
+    cs.enforce(
+      || format!("s(0)+s(1)=s(r) {}", i),
+      |lc| lc + eval_0.get_variable() + eval_1.get_variable(),
+      |lc| lc + CS::one(),
+      |lc| lc + e.get_variable(),
+    );
 
     let r_i = challenges[i].clone(); // this is while Transcript circuit is not ready
 
@@ -41,13 +48,6 @@ where
       poly.clone(),
       r_i,
     )?;
-
-    cs.enforce(
-      || "s(0)+s(1)=s(r)",
-      |lc| lc + eval_0.get_variable() + eval_1.get_variable(),
-      |lc| lc,
-      |lc| lc + e.get_variable(),
-    );
   }
 
   // note: challenges will be replaced by r vector once the Transcript circuit is ready
@@ -104,13 +104,12 @@ mod tests {
     {shape_cs::ShapeCS, solver::SatisfyingAssignment},
   };
   use crate::spartan::sumcheck::UniPoly;
-  use pasta_curves::{
-    arithmetic::CurveAffine,
-    group::{Curve, Group},
-    pallas,
-    pallas::Scalar,
-    vesta,
-  };
+  use pasta_curves::{arithmetic::CurveAffine, pallas, pallas::Scalar, vesta};
+
+  use crate::traits::{Group, TranscriptEngineTrait, TranscriptReprTrait};
+  type PastaG1 = pasta_curves::pallas::Point;
+  use crate::spartan::polynomial::MultilinearPolynomial;
+  use crate::spartan::sumcheck::SumcheckProof;
 
   fn synthetize_uni_evaluate<Scalar, CS>(
     mut cs: CS,
@@ -159,7 +158,6 @@ mod tests {
     // let's test it against the CS
     let mut cs: ShapeCS<pallas::Point> = ShapeCS::new();
     let _ = synthetize_uni_evaluate(&mut cs, p.coeffs.clone(), r);
-
     println!("Number of constraints: {}", cs.num_constraints());
 
     let (shape, ck) = cs.r1cs_shape();
@@ -173,6 +171,116 @@ mod tests {
     assert!(shape.is_sat(&ck, &inst, &witness).is_ok());
   }
 
+  fn synthetize_sumcheck_verify<Scalar, CS>(
+    mut cs: CS,
+    claim: &Scalar,
+    num_rounds: usize,
+    degree_bound: usize,
+    polys: &Vec<Vec<Scalar>>,
+    challenges: &Vec<Scalar>,
+  ) -> (AllocatedNum<Scalar>, Vec<AllocatedNum<Scalar>>)
+  where
+    Scalar: PrimeField + PrimeFieldBits,
+    CS: ConstraintSystem<Scalar>,
+  {
+    // prepare inputs
+    let claim_var =
+      AllocatedNum::<Scalar>::alloc(cs.namespace(|| "alloc claim"), || Ok(*claim)).unwrap();
+
+    let mut polys_var: Vec<Vec<AllocatedNum<Scalar>>> = Vec::new();
+    for (i, poly) in polys.iter().enumerate() {
+      let mut poly_var: Vec<AllocatedNum<Scalar>> = Vec::new();
+      for (j, coef) in polys.iter().enumerate() {
+        poly_var.push(
+          AllocatedNum::<Scalar>::alloc(cs.namespace(|| format!("alloc poly {},{}", i, j)), || {
+            Ok(poly[j])
+          })
+          .unwrap(),
+        );
+      }
+      polys_var.push(poly_var);
+    }
+    let mut challenges_var: Vec<AllocatedNum<Scalar>> = Vec::new();
+    for (i, challenge) in challenges.iter().enumerate() {
+      challenges_var.push(
+        AllocatedNum::<Scalar>::alloc(cs.namespace(|| format!("alloc challenge {}", i)), || {
+          Ok(*challenge)
+        })
+        .unwrap(),
+      );
+    }
+
+    // verify in-circuit (synthetize)
+    let res = verify(
+      cs.namespace(|| "verify"),
+      claim_var,
+      num_rounds,
+      degree_bound,
+      polys_var,
+      challenges_var,
+    )
+    .unwrap();
+    // let _ = res.inputize(cs.namespace(|| "Output res"));
+
+    res
+  }
+
   #[test]
-  fn test_sumcheck_verify() {}
+  fn test_sumcheck_verify() {
+    // g(X_0, X_1, X_2) = 2 X_0^3 + X_0 X_2 + X_1 X_2
+    let Z = vec![
+      Scalar::zero(),
+      Scalar::zero(),
+      Scalar::zero(),
+      Scalar::from(1),
+      Scalar::from(2),
+      Scalar::from(3),
+      Scalar::from(2),
+      Scalar::from(4),
+    ];
+    let g = MultilinearPolynomial::<Scalar>::new(Z.clone());
+
+    let mut transcript_p = <pasta_curves::Ep as Group>::TE::new(b"sumcheck");
+    let (sc_proof, claim) = SumcheckProof::<PastaG1>::prove(&g, &mut transcript_p).unwrap();
+
+    // generate the verifier challenges for the circuit (in the future this will be done
+    // in-circuit). Also prepare the uncompressed polys.
+    let mut transcript_v = <pasta_curves::Ep as Group>::TE::new(b"sumcheck");
+    let mut r: Vec<Scalar> = Vec::new();
+    let mut polys: Vec<Vec<Scalar>> = Vec::new();
+    let mut e = claim;
+    for i in 0..sc_proof.compressed_polys.len() {
+      let poly = sc_proof.compressed_polys[i].decompress(&e);
+      polys.push(poly.coeffs.clone());
+      transcript_v.absorb(b"p", &poly);
+      let r_i = transcript_v.squeeze(b"c").unwrap();
+      r.push(r_i);
+      e = poly.evaluate(&r_i);
+    }
+
+    let num_rounds = g.get_num_vars();
+    let degree_bound = 2;
+
+    // verify sumcheck proof (no circuit)
+    let mut transcript_v = <pasta_curves::Ep as Group>::TE::new(b"sumcheck");
+    let (e, r) = sc_proof
+      .verify(claim, num_rounds, degree_bound, &mut transcript_v)
+      .unwrap();
+    assert_eq!(e, g.evaluate(&r));
+
+    // let's test it against the CS
+    let mut cs: ShapeCS<pallas::Point> = ShapeCS::new();
+    let _ = synthetize_sumcheck_verify(&mut cs, &claim, num_rounds, degree_bound, &polys, &r);
+    println!("Number of constraints: {}", cs.num_constraints());
+
+    let (shape, ck) = cs.r1cs_shape();
+
+    let mut cs: SatisfyingAssignment<pallas::Point> = SatisfyingAssignment::new();
+    let (verify_e, verify_r) =
+      synthetize_sumcheck_verify(&mut cs, &claim, num_rounds, degree_bound, &polys, &r);
+    assert_eq!(verify_e.get_value().unwrap(), g.evaluate(&r));
+
+    let (inst, witness) = cs.r1cs_instance_and_witness(&shape, &ck).unwrap();
+    assert!(shape.is_sat(&ck, &inst, &witness).is_ok());
+  }
 }
