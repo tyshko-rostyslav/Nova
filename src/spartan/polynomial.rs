@@ -61,7 +61,7 @@ impl<Scalar: PrimeField> EqPolynomial<Scalar> {
   }
 }
 
-/// A multilinear extension of a polynomial $Z(\cdot)$, donate it as $\tilde{Z}(x_1, ..., x_m)$
+/// A multilinear extension of a polynomial $Z(\cdot)$, denote it as $\tilde{Z}(x_1, ..., x_m)$
 /// where the degree of each variable is at most one.
 ///
 /// This is the dense representation of a multilinear poynomial.

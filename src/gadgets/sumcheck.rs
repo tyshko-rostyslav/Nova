@@ -190,7 +190,7 @@ mod tests {
     let mut polys_var: Vec<Vec<AllocatedNum<Scalar>>> = Vec::new();
     for (i, poly) in polys.iter().enumerate() {
       let mut poly_var: Vec<AllocatedNum<Scalar>> = Vec::new();
-      for (j, coef) in polys.iter().enumerate() {
+      for (j, coef) in poly.iter().enumerate() {
         poly_var.push(
           AllocatedNum::<Scalar>::alloc(cs.namespace(|| format!("alloc poly {},{}", i, j)), || {
             Ok(poly[j])
@@ -225,21 +225,7 @@ mod tests {
     res
   }
 
-  #[test]
-  fn test_sumcheck_verify() {
-    // g(X_0, X_1, X_2) = 2 X_0^3 + X_0 X_2 + X_1 X_2
-    let Z = vec![
-      Scalar::zero(),
-      Scalar::zero(),
-      Scalar::zero(),
-      Scalar::from(1),
-      Scalar::from(2),
-      Scalar::from(3),
-      Scalar::from(2),
-      Scalar::from(4),
-    ];
-    let g = MultilinearPolynomial::<Scalar>::new(Z.clone());
-
+  fn test_sumcheck_verify(g: MultilinearPolynomial<Scalar>) {
     let mut transcript_p = <pasta_curves::Ep as Group>::TE::new(b"sumcheck");
     let (sc_proof, claim) = SumcheckProof::<PastaG1>::prove(&g, &mut transcript_p).unwrap();
 
@@ -282,5 +268,30 @@ mod tests {
 
     let (inst, witness) = cs.r1cs_instance_and_witness(&shape, &ck).unwrap();
     assert!(shape.is_sat(&ck, &inst, &witness).is_ok());
+  }
+
+  #[test]
+  fn test_sumcheck_verify_hardcoded_values() {
+    // g(X_0, X_1, X_2) = 2 X_0^3 + X_0 X_2 + X_1 X_2
+    let Z = vec![
+      Scalar::zero(),
+      Scalar::zero(),
+      Scalar::zero(),
+      Scalar::from(1),
+      Scalar::from(2),
+      Scalar::from(3),
+      Scalar::from(2),
+      Scalar::from(4),
+    ];
+    let g = MultilinearPolynomial::<Scalar>::new(Z.clone());
+    test_sumcheck_verify(g);
+  }
+
+  #[test]
+  fn test_sumcheck_verify_random_values() {
+    let rng = &mut rand::rngs::OsRng;
+    let Z: Vec<Scalar> = vec![Scalar::random(rng); 64];
+    let g = MultilinearPolynomial::<Scalar>::new(Z.clone());
+    test_sumcheck_verify(g);
   }
 }

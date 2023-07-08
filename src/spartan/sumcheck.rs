@@ -449,8 +449,33 @@ mod tests {
   use pasta_curves::Fq;
   type PastaG1 = pasta_curves::pallas::Point;
 
+  fn test_sumcheck(g: MultilinearPolynomial<Fq>) {
+    let n_vars = g.get_num_vars();
+
+    // claim:
+    let mut T = Fq::ZERO;
+    for x in BooleanHypercube::new(n_vars) {
+      T += g.evaluate(&x);
+    }
+
+    // SumCheck proof
+    let mut transcript_p = <pasta_curves::Ep as Group>::TE::new(b"sumcheck");
+    let (sc_proof, claim) = SumcheckProof::<PastaG1>::prove(&g, &mut transcript_p).unwrap();
+
+    // SumCheck verification
+    let num_rounds = n_vars;
+    let degree_bound = 2;
+    let mut transcript_v = <pasta_curves::Ep as Group>::TE::new(b"sumcheck");
+    let (e, r) = sc_proof
+      .verify(claim, num_rounds, degree_bound, &mut transcript_v)
+      .unwrap();
+
+    assert_eq!(claim, T);
+    assert_eq!(e, g.evaluate(&r));
+  }
+
   #[test]
-  fn test_prove() {
+  fn test_prove_hardcoded_values() {
     // g(X_0, X_1, X_2) = 2 X_0^3 + X_0 X_2 + X_1 X_2
     let Z = vec![
       Fq::zero(),
@@ -463,24 +488,15 @@ mod tests {
       Fq::from(4),
     ];
     let g = MultilinearPolynomial::<Fq>::new(Z.clone());
+    test_sumcheck(g);
+  }
 
-    // claim:
-    let mut T = Fq::ZERO;
-    for x in BooleanHypercube::new(3) {
-      T += g.evaluate(&x);
-    }
+  #[test]
+  fn test_prove_random_values() {
+    let rng = &mut rand::rngs::OsRng;
+    let Z: Vec<Fq> = vec![Fq::random(rng); 64];
+    let g = MultilinearPolynomial::<Fq>::new(Z.clone());
 
-    let mut transcript_p = <pasta_curves::Ep as Group>::TE::new(b"sumcheck");
-    let (sc_proof, claim) = SumcheckProof::<PastaG1>::prove(&g, &mut transcript_p).unwrap();
-
-    let num_rounds = g.get_num_vars();
-    let degree_bound = 2;
-    let mut transcript_v = <pasta_curves::Ep as Group>::TE::new(b"sumcheck");
-    let (e, r) = sc_proof
-      .verify(claim, num_rounds, degree_bound, &mut transcript_v)
-      .unwrap();
-
-    assert_eq!(claim, T);
-    assert_eq!(e, g.evaluate(&r));
+    test_sumcheck(g);
   }
 }
