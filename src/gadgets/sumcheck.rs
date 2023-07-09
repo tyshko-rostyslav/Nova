@@ -24,10 +24,14 @@ where
 {
   let mut e = claim;
   for (i, poly) in polys.iter().enumerate() {
-    // TODO verify poly degree
-    // if poly.len() != degree_bound {
-    //   dbg!(poly.len(), degree_bound);
-    // }
+    // verify poly degree // TODO move check to constraints
+    if poly.len() - 1 != degree_bound {
+      panic!(
+        "poly degree {:?} != degree_bound {:?}",
+        poly.len() - 1,
+        degree_bound
+      );
+    }
 
     // eval at zero
     let eval_0 = poly[0].clone();
@@ -35,7 +39,7 @@ where
     let eval_1 = eval_at_one(cs.namespace(|| format!("sc_eval_at_one {}", i)), poly)?;
 
     cs.enforce(
-      || format!("s(0)+s(1)=s(r) {}", i),
+      || format!("(s(0)+s(1)) * 1 = s(r) {}", i),
       |lc| lc + eval_0.get_variable() + eval_1.get_variable(),
       |lc| lc + CS::one(),
       |lc| lc + e.get_variable(),
@@ -64,7 +68,20 @@ where
 {
   let mut eval: Num<Scalar> = Num::<Scalar>::from(poly[0].clone());
   for (i, coeff) in poly.iter().enumerate().skip(1) {
-    eval = eval.add(&Num::<Scalar>::from(coeff.clone()));
+    // logic: eval_aux = eval + coef
+    let eval_aux = eval.clone().add(&Num::<Scalar>::from(coeff.clone()));
+    // r1cs constr: (eval + coeff) * 1 = eval_aux
+    let allocated_eval: AllocatedNum<Scalar> =
+      AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval.get_value().unwrap()))?;
+    let allocated_eval_aux: AllocatedNum<Scalar> =
+      AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval_aux.get_value().unwrap()))?;
+    cs.enforce(
+      || format!("eval + coeff = eval_aux{}", i),
+      |lc| lc + allocated_eval.get_variable() + coeff.get_variable(),
+      |lc| lc + CS::one(),
+      |lc| lc + allocated_eval_aux.get_variable(),
+    );
+    eval = eval_aux;
   }
   let allocated_eval: AllocatedNum<Scalar> =
     AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval.get_value().unwrap()))?;
@@ -85,10 +102,33 @@ where
   let mut eval: Num<Scalar> = Num::<Scalar>::from(coeffs[0].clone());
   let mut power = r.clone();
   for (i, coeff) in coeffs.iter().enumerate().skip(1) {
-    eval = eval.add(&Num::<Scalar>::from(
+    // logic: eval_aux = eval + power * coeff
+    let eval_aux = eval.clone().add(&Num::<Scalar>::from(
       power.mul(cs.namespace(|| format!("mul {}", i)), &coeff)?,
     ));
-    power = power.mul(cs.namespace(|| format!("mul2 {}", i)), &r)?;
+    // r1cs constr: power * coeff = eval - eval_aux
+    let allocated_eval: AllocatedNum<Scalar> =
+      AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval.get_value().unwrap()))?;
+    let allocated_eval_aux: AllocatedNum<Scalar> =
+      AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval_aux.get_value().unwrap()))?;
+    cs.enforce(
+      || format!("power * coeff = eval_aux - eval{}", i),
+      |lc| lc + power.get_variable(),
+      |lc| lc + coeff.get_variable(),
+      |lc| lc + allocated_eval_aux.get_variable() - allocated_eval.get_variable(),
+    );
+    eval = eval_aux;
+
+    // logic: power_aux = power * r
+    let power_aux = power.mul(cs.namespace(|| format!("mul2 {}", i)), &r)?;
+    // r1cs constr: power_aux = power * r
+    cs.enforce(
+      || format!("power_aux = power * r {}", i),
+      |lc| lc + power.get_variable(),
+      |lc| lc + r.get_variable(),
+      |lc| lc + power_aux.get_variable(),
+    );
+    power = power_aux;
   }
   let allocated_eval: AllocatedNum<Scalar> =
     AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval.get_value().unwrap()))?;
@@ -164,7 +204,6 @@ mod tests {
 
     let mut cs: SatisfyingAssignment<pallas::Point> = SatisfyingAssignment::new();
     let res = synthetize_uni_evaluate(&mut cs, p.coeffs.clone(), r);
-    println!("circ res {:?}", res.get_value());
     assert_eq!(res.get_value().unwrap(), p.evaluate(&r));
 
     let (inst, witness) = cs.r1cs_instance_and_witness(&shape, &ck).unwrap();
