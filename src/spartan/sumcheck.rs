@@ -337,7 +337,7 @@ impl<G: Group> SumcheckProof<G> {
 // ax^3 + bx^2 + cx + d stored as vec![a,b,c,d]
 #[derive(Debug)]
 pub struct UniPoly<G: Group> {
-  pub coeffs: Vec<G::Scalar>,
+  coeffs: Vec<G::Scalar>,
 }
 
 // ax^2 + bx + c stored as vec![a,c]
@@ -380,6 +380,10 @@ impl<G: Group> UniPoly<G> {
     };
 
     UniPoly { coeffs }
+  }
+
+  pub fn get_coeffs(&self) -> Vec<G::Scalar> {
+    self.coeffs.clone()
   }
 
   pub fn degree(&self) -> usize {

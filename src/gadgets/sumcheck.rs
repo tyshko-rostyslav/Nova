@@ -1,4 +1,5 @@
 #![allow(unused)]
+#![allow(missing_docs)]
 use crate::traits::Group;
 use bellperson::{
   gadgets::{
@@ -67,13 +68,15 @@ where
   CS: ConstraintSystem<Scalar>,
 {
   let mut eval: Num<Scalar> = Num::<Scalar>::from(poly[0].clone());
+  let mut allocated_eval_aux: AllocatedNum<Scalar> =
+    AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval.get_value().unwrap()))?;
   for (i, coeff) in poly.iter().enumerate().skip(1) {
     // logic: eval_aux = eval + coef
     let eval_aux = eval.clone().add(&Num::<Scalar>::from(coeff.clone()));
     // r1cs constr: (eval + coeff) * 1 = eval_aux
     let allocated_eval: AllocatedNum<Scalar> =
       AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval.get_value().unwrap()))?;
-    let allocated_eval_aux: AllocatedNum<Scalar> =
+    allocated_eval_aux =
       AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval_aux.get_value().unwrap()))?;
     cs.enforce(
       || format!("eval + coeff = eval_aux{}", i),
@@ -83,10 +86,7 @@ where
     );
     eval = eval_aux;
   }
-  let allocated_eval: AllocatedNum<Scalar> =
-    AllocatedNum::<Scalar>::alloc(&mut cs, || Ok(eval.get_value().unwrap()))?;
-
-  Ok(allocated_eval)
+  Ok(allocated_eval_aux)
 }
 
 // method compatible with src/spartan/sumcheck.rs > UniPoly::evaluate()
@@ -99,7 +99,7 @@ where
   Scalar: PrimeField + PrimeFieldBits,
   CS: ConstraintSystem<Scalar>,
 {
-  let mut eval: Num<Scalar> = Num::<Scalar>::from(coeffs[0].clone());
+  let mut eval = Num::<Scalar>::from(coeffs[0].clone());
   let mut power = r.clone();
   for (i, coeff) in coeffs.iter().enumerate().skip(1) {
     // logic: eval_aux = eval + power * coeff
@@ -151,7 +151,7 @@ mod tests {
   use crate::spartan::polynomial::MultilinearPolynomial;
   use crate::spartan::sumcheck::SumcheckProof;
 
-  fn synthetize_uni_evaluate<Scalar, CS>(
+  fn synthesize_uni_evaluate<Scalar, CS>(
     mut cs: CS,
     coeffs: Vec<Scalar>,
     r: Scalar,
@@ -178,7 +178,7 @@ mod tests {
     //   let _ = coeff.inputize(cs.namespace(|| format!("Input coeffs {}", i)));
     // }
 
-    // evaluate in-circuit (synthetize)
+    // evaluate in-circuit (synthesize)
     let res = uni_evaluate(cs.namespace(|| "uni_evaluate"), coeffs_var, r_var).unwrap();
     // let _ = res.inputize(cs.namespace(|| "Output res"));
 
@@ -197,20 +197,20 @@ mod tests {
 
     // let's test it against the CS
     let mut cs: ShapeCS<pallas::Point> = ShapeCS::new();
-    let _ = synthetize_uni_evaluate(&mut cs, p.coeffs.clone(), r);
+    let _ = synthesize_uni_evaluate(&mut cs, p.get_coeffs(), r);
     println!("Number of constraints: {}", cs.num_constraints());
 
     let (shape, ck) = cs.r1cs_shape();
 
     let mut cs: SatisfyingAssignment<pallas::Point> = SatisfyingAssignment::new();
-    let res = synthetize_uni_evaluate(&mut cs, p.coeffs.clone(), r);
+    let res = synthesize_uni_evaluate(&mut cs, p.get_coeffs(), r);
     assert_eq!(res.get_value().unwrap(), p.evaluate(&r));
 
     let (inst, witness) = cs.r1cs_instance_and_witness(&shape, &ck).unwrap();
     assert!(shape.is_sat(&ck, &inst, &witness).is_ok());
   }
 
-  fn synthetize_sumcheck_verify<Scalar, CS>(
+  fn synthesize_sumcheck_verify<Scalar, CS>(
     mut cs: CS,
     claim: &Scalar,
     num_rounds: usize,
@@ -249,7 +249,7 @@ mod tests {
       );
     }
 
-    // verify in-circuit (synthetize)
+    // verify in-circuit (synthesize)
     let res = verify(
       cs.namespace(|| "verify"),
       claim_var,
@@ -276,7 +276,7 @@ mod tests {
     let mut e = claim;
     for i in 0..sc_proof.compressed_polys.len() {
       let poly = sc_proof.compressed_polys[i].decompress(&e);
-      polys.push(poly.coeffs.clone());
+      polys.push(poly.get_coeffs());
       transcript_v.absorb(b"p", &poly);
       let r_i = transcript_v.squeeze(b"c").unwrap();
       r.push(r_i);
@@ -295,14 +295,14 @@ mod tests {
 
     // let's test it against the CS
     let mut cs: ShapeCS<pallas::Point> = ShapeCS::new();
-    let _ = synthetize_sumcheck_verify(&mut cs, &claim, num_rounds, degree_bound, &polys, &r);
+    let _ = synthesize_sumcheck_verify(&mut cs, &claim, num_rounds, degree_bound, &polys, &r);
     println!("Number of constraints: {}", cs.num_constraints());
 
     let (shape, ck) = cs.r1cs_shape();
 
     let mut cs: SatisfyingAssignment<pallas::Point> = SatisfyingAssignment::new();
     let (verify_e, verify_r) =
-      synthetize_sumcheck_verify(&mut cs, &claim, num_rounds, degree_bound, &polys, &r);
+      synthesize_sumcheck_verify(&mut cs, &claim, num_rounds, degree_bound, &polys, &r);
     assert_eq!(verify_e.get_value().unwrap(), g.evaluate(&r));
 
     let (inst, witness) = cs.r1cs_instance_and_witness(&shape, &ck).unwrap();
