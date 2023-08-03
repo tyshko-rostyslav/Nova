@@ -29,21 +29,44 @@ use bellperson::{
   ConstraintSystem, SynthesisError,
 };
 
+use ouroboros::self_referencing;
+
 // WARNING: all this is WIP. Current version is just to have something to use in SumCheck & Spartan
 // that fullfills Nova's TranscriptEngineTrait with Poseidon.
 /// Implements the Poseidon Transcript.
-pub struct PoseidonTranscript<'a, G: Group> {
-  sponge: Sponge<'a, G::Scalar, U24>,
+#[self_referencing]
+#[derive(PartialEq, Debug)]
+pub struct PoseidonTranscript<G: Group> {
+  constants: PoseidonConstants<G::Scalar, U24>,
+  #[covariant]
+  #[borrows(constants)]
+  sponge: Sponge<'this, G::Scalar, U24>,
 }
-impl<'a, G: Group> PoseidonTranscript<'a, G> {
-  // impl<'a, G: Group> TranscriptEngineTrait<G> for PoseidonTranscript<'a, G> {
 
+impl<G: Group> PoseidonTranscript<G> {
+  // impl<'a, G: Group> TranscriptEngineTrait<G> for PoseidonTranscript<'a, G> {
   // NOTE: to fullfill the TranscriptEngineTrait, the 'new' method should not have the 'constants'
   // parameter as input.
-  fn new(label: &'static [u8], constants: &'a PoseidonConstants<G::Scalar, U24>) -> Self {
-    let mut sponge: Sponge<'a, G::Scalar, U24> =
-      Sponge::<G::Scalar, U24>::new_with_constants(&constants, Mode::Duplex);
-    Self { sponge }
+  fn newAUX(label: &'static [u8], constants: PoseidonConstants<G::Scalar, U24>) -> Self {
+    // let mut sponge: Sponge<'_, G::Scalar, U24> =
+    //   Sponge::<G::Scalar, U24>::new_with_constants(&constants, Mode::Duplex);
+    // Self { constants, sponge }
+    let mut my_value = PoseidonTranscriptBuilder {
+      constants,
+
+      // Note that the name of the field in the builder
+      // is the name of the field in the struct + `_builder`
+      // ie: {field_name}_builder
+      // the closure that assigns the value for the field will be passed
+      // a reference to the field(s) defined in the #[borrows] macro
+      sponge_builder: |constants: &PoseidonConstants<G::Scalar, U24>| {
+        Sponge::<G::Scalar, U24>::new_with_constants(constants, Mode::Duplex)
+      },
+      // int_reference_builder: |int_data: &i32| int_data,
+      // float_reference_builder: |float_data: &mut f32| float_data,
+    }
+    .build();
+    my_value
   }
   fn squeeze(&mut self, label: &'static [u8]) -> Result<G::Scalar, NovaError> {
     let acc = &mut ();
@@ -129,19 +152,32 @@ mod tests {
     let num_absorbs = 32;
     let mut transcript: PoseidonTranscript<'_, G> =
       PoseidonTranscript::new(b"poseidontranscript", &constants2);
-    let mut transcript_gadget: PoseidonTranscriptCircuit<'_, G, SatisfyingAssignment<G>> =
+    // let mut transcript_gadget: PoseidonTranscriptCircuit<'_, G, SatisfyingAssignment<G>> =
+    let mut transcript_gadget: PoseidonTranscriptCircuit<'_, G, _> =
       PoseidonTranscriptCircuit::new(&constants2);
 
     let mut cs: SatisfyingAssignment<G> = SatisfyingAssignment::new();
+
     for i in 0..num_absorbs {
       let num = G::Scalar::random(&mut csprng);
       transcript.absorb(b"test", &num);
-      let allocated_num =
-        AllocatedNum::alloc(cs.namespace(|| format!("data {i}")), || Ok(num)).unwrap();
+
+      // let nam = ConstraintSystem::<G::Scalar>::namespace(&mut cs, || format!("data {i}"));
+      let nam = cs.namespace(|| format!("data {i}"));
+      // let allocated_num = AllocatedNum::alloc(nam, || Ok(num)).unwrap();
+
+      let allocated_num = AllocatedNum::alloc(cs, || Ok(num)).unwrap();
+      // AllocatedNum::alloc(cs.namespace(|| format!("data {i}")), || Ok(num)).unwrap();
       allocated_num
+        // .inputize(&mut cs)
         .inputize(&mut cs.namespace(|| format!("input {i}")))
         .unwrap();
-      transcript_gadget.absorb(&mut cs, allocated_num);
+      // allocated_num
+      //   .inputize(cs.namespace(|| format!("input {i}")))
+      //   .unwrap();
+
+      let nam = cs.namespace(|| format!("tmp"));
+      transcript_gadget.absorb(&mut nam, allocated_num);
     }
     let num = transcript.squeeze(b"test");
     let num2: AllocatedNum<G::Scalar> = transcript_gadget.squeeze(&mut cs);

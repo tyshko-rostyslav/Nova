@@ -52,8 +52,13 @@ impl<G: Group> TranscriptEngineTrait<G> for PoseidonTranscript<G> {
   }
   fn squeeze(&mut self, label: &'static [u8]) -> Result<G::Scalar, NovaError> {
     let acc = &mut ();
+
     let mut sponge = Sponge::new_with_constants(&self.constants, Mode::Duplex);
+
+    SpongeAPI::absorb(&mut sponge, self.state.len() as u32, &self.state, acc);
+
     let hash = SpongeAPI::squeeze(&mut sponge, 1, acc);
+
     Ok(hash[0])
   }
   fn dom_sep(&mut self, bytes: &'static [u8]) {
@@ -91,6 +96,7 @@ impl<G: Group> PoseidonTranscriptCircuit<G> {
 
     let mut sponge = SpongeCircuit::new_with_constants(&self.constants, Mode::Duplex);
     let hash = neptune::sponge::api::SpongeAPI::squeeze(&mut sponge, 1, acc);
+    // TODO absorb
     let hash =
       Elt::ensure_allocated(&hash[0], &mut ns.namespace(|| "ensure allocated"), true).unwrap();
     hash
@@ -108,7 +114,6 @@ mod tests {
   use ff::Field;
   use rand::rngs::OsRng;
 
-  /*
   fn test_poseidon_transcript_with<G: Group>()
   where
     // we can print the field elements we get from G's Base & Scalar fields,
@@ -151,5 +156,4 @@ mod tests {
     test_poseidon_transcript_with::<pasta_curves::pallas::Point>();
     // test_poseidon_ro_with::<bn256::Point>();
   }
-  */
 }
