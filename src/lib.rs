@@ -199,7 +199,7 @@ where
     z0_primary: Vec<G1::Scalar>,
     z0_secondary: Vec<G2::Scalar>,
   ) -> Result<Self, NovaError> {
-    let prove_step_timer = start_timer!(|| "Prove step (inside)");
+    // let prove_step_timer = start_timer!(|| "Prove step (inside)");
     if z0_primary.len() != pp.F_arity_primary || z0_secondary.len() != pp.F_arity_secondary {
       return Err(NovaError::InvalidInitialInputLength);
     }
@@ -410,7 +410,7 @@ where
         let zi_secondary = c_secondary.output(&r_snark.zi_secondary);
 
         //end_timer!(recursive_timer);
-        end_timer!(prove_step_timer);
+        // end_timer!(prove_step_timer);
 
         Ok(Self {
           r_W_primary,
